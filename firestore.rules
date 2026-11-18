@@ -1,0 +1,388 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Primitives
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'babaji009300@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidMonthKey(val) {
+      return val is string && val.size() == 7 && val.matches('^\\d{4}-\\d{2}$');
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidUserAccount(data, uid) {
+      return data.uid is string && data.uid == uid && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.role == 'user'
+        && data.plan in ['free', 'premium']
+        && data.currency == 'INR'
+        && data.timezone is string && data.timezone.size() >= 3 && data.timezone.size() <= 64
+        && data.expenseCount is int && data.expenseCount >= 0 && data.expenseCount <= 1000000
+        && data.incomeCount is int && data.incomeCount >= 0 && data.incomeCount <= 1000000
+        && data.goalCount is int && data.goalCount >= 0 && data.goalCount <= 10000
+        && data.budgetCount is int && data.budgetCount >= 0 && data.budgetCount <= 10000
+        && data.aiQueryCount is int && data.aiQueryCount >= 0 && data.aiQueryCount <= 1000000
+        && data.lastActiveAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateProfile(data, uid) {
+      return data.uid is string && data.uid == uid && isValidId(data.uid)
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 80))
+        && (!('persona' in data) || (data.persona in ['student', 'young_professional', 'first_time_earner', 'gig_worker', 'other']))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidExpense(data, uid, expenseId) {
+      return data.id is string && data.id == expenseId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && (data.amount is number || data.amount is int) && data.amount > 0 && data.amount <= 100000000
+        && data.category in ['Food', 'Transport', 'Shopping', 'Education', 'Entertainment', 'Bills', 'Health', 'Travel', 'Other']
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 200
+        && isValidDateString(data.date)
+        && (!('paymentMethod' in data) || (data.paymentMethod in ['UPI', 'Cash', 'Debit Card', 'Credit Card', 'NetBanking', 'Wallet', '']))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIncome(data, uid, incomeId) {
+      return data.id is string && data.id == incomeId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && (data.amount is number || data.amount is int) && data.amount > 0 && data.amount <= 100000000
+        && data.category in ['Salary', 'Pocket Money', 'Freelance Income', 'Business Income', 'Allowance', 'Other Income']
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 200
+        && isValidDateString(data.date)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBudget(data, uid, budgetId) {
+      return data.id is string && data.id == budgetId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && isValidMonthKey(data.monthKey)
+        && data.category in ['Overall', 'Food', 'Transport', 'Shopping', 'Education', 'Entertainment', 'Bills', 'Health', 'Travel', 'Other']
+        && (data.limitAmount is number || data.limitAmount is int) && data.limitAmount > 0 && data.limitAmount <= 100000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGoal(data, uid, goalId) {
+      return data.id is string && data.id == goalId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && (!('category' in data) || (data.category is string && data.category.size() <= 60))
+        && (data.targetAmount is number || data.targetAmount is int) && data.targetAmount > 0 && data.targetAmount <= 100000000
+        && (data.currentAmount is number || data.currentAmount is int) && data.currentAmount >= 0 && data.currentAmount <= 100000000
+        && isValidDateString(data.targetDate)
+        && data.status in ['active', 'completed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data, uid, notificationId) {
+      return data.id is string && data.id == notificationId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && data.type in ['budget_warning', 'budget_exceeded', 'goal_progress', 'savings_reminder', 'monthly_summary', 'account_update']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 400
+        && data.read is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPreference(data, uid, preferenceId) {
+      return data.id is string && data.id == preferenceId && isValidId(data.id)
+        && data.uid is string && data.uid == uid && isValidId(data.uid)
+        && data.budgetAlerts80 is bool
+        && data.budgetAlerts100 is bool
+        && data.savingsReminders is bool
+        && data.goalMilestones is bool
+        && data.monthlyDigest is bool
+        && data.pushEnabled is bool
+        && data.hideBalances is bool
+        && data.aiContextSharing is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Trusted Admins Registry (Client writes forbidden)
+    // -------------------------------------------------------------------------
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // User Account Metadata & Aggregate Usage Counters (Zero PII, Zero Amounts)
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+
+      allow create: if isValidId(uid)
+        && isOwner(uid)
+        && incoming().keys().hasAll(['uid', 'displayName', 'role', 'plan', 'currency', 'timezone', 'expenseCount', 'incomeCount', 'goalCount', 'budgetCount', 'aiQueryCount', 'lastActiveAt', 'createdAt', 'updatedAt'])
+        && incoming().keys().hasOnly(['uid', 'displayName', 'role', 'plan', 'currency', 'timezone', 'expenseCount', 'incomeCount', 'goalCount', 'budgetCount', 'aiQueryCount', 'lastActiveAt', 'createdAt', 'updatedAt'])
+        && isValidUserAccount(incoming(), uid)
+        && incoming().plan == 'free'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(uid)
+        && isOwner(uid)
+        && isValidUserAccount(incoming(), uid)
+        && incoming().uid == existing().uid
+        && incoming().role == existing().role
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'timezone', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['expenseCount', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['incomeCount', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['goalCount', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['budgetCount', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['aiQueryCount', 'lastActiveAt', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['lastActiveAt', 'updatedAt'])
+        );
+
+      allow delete: if isValidId(uid) && isOwner(uid);
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Private PII Profile
+      // -----------------------------------------------------------------------
+      match /private/{docId} {
+        allow get: if isValidId(uid) && isValidId(docId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(docId) && isOwner(uid)
+          && incoming().keys().hasAll(['uid', 'fullName', 'email', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['uid', 'fullName', 'email', 'photoURL', 'city', 'persona', 'createdAt', 'updatedAt'])
+          && isValidPrivateProfile(incoming(), uid)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(docId) && isOwner(uid)
+          && isValidPrivateProfile(incoming(), uid)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'email', 'photoURL', 'city', 'persona', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(docId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Expenses Subcollection
+      // -----------------------------------------------------------------------
+      match /expenses/{expenseId} {
+        allow get: if isValidId(uid) && isValidId(expenseId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(expenseId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'amount', 'category', 'description', 'date', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'amount', 'category', 'description', 'date', 'paymentMethod', 'createdAt', 'updatedAt'])
+          && isValidExpense(incoming(), uid, expenseId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(expenseId) && isOwner(uid)
+          && isValidExpense(incoming(), uid, expenseId)
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['amount', 'category', 'description', 'date', 'paymentMethod', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(expenseId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Income Subcollection
+      // -----------------------------------------------------------------------
+      match /income/{incomeId} {
+        allow get: if isValidId(uid) && isValidId(incomeId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(incomeId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'amount', 'category', 'description', 'date', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'amount', 'category', 'description', 'date', 'createdAt', 'updatedAt'])
+          && isValidIncome(incoming(), uid, incomeId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(incomeId) && isOwner(uid)
+          && isValidIncome(incoming(), uid, incomeId)
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['amount', 'category', 'description', 'date', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(incomeId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Budgets Subcollection
+      // -----------------------------------------------------------------------
+      match /budgets/{budgetId} {
+        allow get: if isValidId(uid) && isValidId(budgetId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(budgetId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'monthKey', 'category', 'limitAmount', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'monthKey', 'category', 'limitAmount', 'createdAt', 'updatedAt'])
+          && isValidBudget(incoming(), uid, budgetId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(budgetId) && isOwner(uid)
+          && isValidBudget(incoming(), uid, budgetId)
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['monthKey', 'category', 'limitAmount', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(budgetId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Savings Goals Subcollection
+      // -----------------------------------------------------------------------
+      match /goals/{goalId} {
+        allow get: if isValidId(uid) && isValidId(goalId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(goalId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'name', 'targetAmount', 'currentAmount', 'targetDate', 'status', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'name', 'category', 'targetAmount', 'currentAmount', 'targetDate', 'status', 'createdAt', 'updatedAt'])
+          && isValidGoal(incoming(), uid, goalId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(goalId) && isOwner(uid)
+          && isValidGoal(incoming(), uid, goalId)
+          && existing().status != 'completed'
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['currentAmount', 'status', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'targetAmount', 'targetDate', 'status', 'updatedAt'])
+          );
+
+        allow delete: if isValidId(uid) && isValidId(goalId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Notifications Subcollection
+      // -----------------------------------------------------------------------
+      match /notifications/{notificationId} {
+        allow get: if isValidId(uid) && isValidId(notificationId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(notificationId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'type', 'title', 'message', 'read', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'type', 'title', 'message', 'read', 'createdAt', 'updatedAt'])
+          && isValidNotification(incoming(), uid, notificationId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(notificationId) && isOwner(uid)
+          && isValidNotification(incoming(), uid, notificationId)
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(notificationId) && isOwner(uid);
+      }
+
+      // -----------------------------------------------------------------------
+      // Owner-Only Preferences Subcollection
+      // -----------------------------------------------------------------------
+      match /preferences/{preferenceId} {
+        allow get: if isValidId(uid) && isValidId(preferenceId) && isOwner(uid);
+        allow list: if isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        allow create: if isValidId(uid) && isValidId(preferenceId) && isOwner(uid)
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && incoming().keys().hasAll(['id', 'uid', 'budgetAlerts80', 'budgetAlerts100', 'savingsReminders', 'goalMilestones', 'monthlyDigest', 'pushEnabled', 'hideBalances', 'aiContextSharing', 'createdAt', 'updatedAt'])
+          && incoming().keys().hasOnly(['id', 'uid', 'budgetAlerts80', 'budgetAlerts100', 'savingsReminders', 'goalMilestones', 'monthlyDigest', 'pushEnabled', 'hideBalances', 'aiContextSharing', 'createdAt', 'updatedAt'])
+          && isValidPreference(incoming(), uid, preferenceId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(uid) && isValidId(preferenceId) && isOwner(uid)
+          && isValidPreference(incoming(), uid, preferenceId)
+          && incoming().id == existing().id
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['budgetAlerts80', 'budgetAlerts100', 'savingsReminders', 'goalMilestones', 'monthlyDigest', 'pushEnabled', 'hideBalances', 'aiContextSharing', 'updatedAt']);
+
+        allow delete: if isValidId(uid) && isValidId(preferenceId) && isOwner(uid);
+      }
+    }
+  }
+}

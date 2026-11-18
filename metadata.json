@@ -1,0 +1,6 @@
+{
+  "name": "SaveSmart",
+  "description": "Track Smart. Spend Better. Save More. Personal finance, budgeting, savings goals, and AI financial insights built for India in INR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
